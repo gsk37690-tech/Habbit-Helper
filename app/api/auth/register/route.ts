@@ -20,6 +20,47 @@ export async function POST(request: Request) {
     const user = { username, email, passwordHash: await hash(password, 12), level: 1, xp: 0, gold: 0, streak: 0, createdAt: new Date() };
     const result = await users.insertOne(user);
     const createdUser = { _id: result.insertedId, ...user };
+
+    // Seed starter quests for the new adventurer
+    const starterQuests = [
+      {
+        userId: result.insertedId,
+        title: "The Morning Rite: Clear the Mind",
+        description: "Spend 10 minutes meditating and organizing today's objectives.",
+        type: "Daily",
+        difficulty: "Easy",
+        xp: 50,
+        gold: 20,
+        due: "Today",
+        progress: 0,
+        tag: "Rituals",
+        pinned: true,
+        completed: false,
+        status: "active",
+        createdAt: new Date(),
+      },
+      {
+        userId: result.insertedId,
+        title: "First Step into the Realm",
+        description: "Complete your initial quest to ignite your streak.",
+        type: "Main",
+        difficulty: "Easy",
+        xp: 100,
+        gold: 35,
+        due: "Tomorrow",
+        progress: 0,
+        tag: "Adventure",
+        pinned: false,
+        completed: false,
+        status: "active",
+        createdAt: new Date(),
+      },
+    ];
+
+    for (const starterQuest of starterQuests) {
+      await database.collection("quests").insertOne(starterQuest);
+    }
+
     await createSession(result.insertedId);
     return NextResponse.json({ user: publicUser(createdUser) }, { status: 201 });
   } catch {

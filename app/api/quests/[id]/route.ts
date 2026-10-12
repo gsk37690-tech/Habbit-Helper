@@ -12,13 +12,20 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!ObjectId.isValid(id)) return NextResponse.json({ error: "Invalid quest id." }, { status: 400 });
   const body = await request.json();
   const updates: Record<string, unknown> = {};
-  for (const field of ["title", "description", "type", "difficulty", "due", "tag", "progress", "pinned"]) {
+  for (const field of ["title", "description", "type", "difficulty", "due", "tag", "progress", "pinned", "completed"]) {
     if (body[field] !== undefined) updates[field] = body[field];
   }
   if (body.status !== undefined) {
-    if (!["active", "stopped", "failed"].includes(body.status)) return NextResponse.json({ error: "Invalid quest status." }, { status: 400 });
+    if (!["active", "stopped", "failed", "completed"].includes(body.status)) {
+      return NextResponse.json({ error: "Invalid quest status." }, { status: 400 });
+    }
     updates.status = body.status;
+    if (body.status === "active") updates.completed = false;
+  }
+  if (body.completed === false) {
     updates.completed = false;
+    updates.status = "active";
+    if (updates.progress === undefined) updates.progress = 0;
   }
   const database = await getDatabase();
   const result = await database.collection("quests").findOneAndUpdate({ _id: new ObjectId(id), userId: user._id }, { $set: updates }, { returnDocument: "after" });

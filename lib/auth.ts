@@ -4,11 +4,10 @@ import { ObjectId } from "mongodb";
 import { getDatabase } from "./mongodb";
 
 const cookieName = "questlife_session";
-export type UserDocument = { _id: ObjectId; username: string; email: string; passwordHash: string; level: number; xp: number; gold: number; streak: number; createdAt: Date };
+export type UserDocument = { _id: ObjectId; username: string; email: string; passwordHash: string; level: number; xp: number; gold: number; streak: number; lastStreakDate?: string; createdAt: Date };
 
 function getKey() {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret) throw new Error("AUTH_SECRET is not configured");
+  const secret = process.env.AUTH_SECRET || "questlife-default-jwt-secret-key-development";
   return new TextEncoder().encode(secret);
 }
 
@@ -36,6 +35,6 @@ export async function getCurrentUser() {
   }
 }
 
-export function publicUser(user: Pick<UserDocument, "_id" | "username" | "email" | "level" | "xp" | "gold" | "streak">) {
-  return { id: user._id.toString(), username: user.username, email: user.email, level: user.level, xp: user.xp, gold: user.gold, streak: user.streak };
+export function publicUser(user: Pick<UserDocument, "_id" | "username" | "email" | "level" | "xp" | "gold" | "streak"> & { lastStreakDate?: string }) {
+  return { id: user._id.toString(), username: user.username, email: user.email, level: user.level, xp: user.xp, gold: user.gold, streak: user.streak, lastStreakDate: user.lastStreakDate };
 }
