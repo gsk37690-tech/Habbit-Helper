@@ -62,7 +62,7 @@ export default function Home() {
   const [inventory, setInventory] = useState(startingInventory);
   const [selectedAvatar, setSelectedAvatar] = useState("wayfinder");
   const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(() => dateKey(new Date()));
   const [questView, setQuestView] = useState<"active" | "completed">("active");
   const [activeFilter, setActiveFilter] = useState<QuestFilter>("All quests");
   const [search, setSearch] = useState("");
@@ -78,7 +78,32 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
 
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 3000); };
-  useEffect(() => { api("/api/auth/me").then((data) => setUser(data.user)).catch(() => undefined).finally(() => setCheckingSession(false)); }, []);
+  useEffect(() => {
+    let active = true;
+    const timeout = setTimeout(() => {
+      if (active) setCheckingSession(false);
+    }, 1200);
+
+    api("/api/auth/me")
+      .then((data) => {
+        if (active) setUser(data?.user ?? null);
+      })
+      .catch(() => {
+        if (active) setUser(null);
+      })
+      .finally(() => {
+        if (active) {
+          clearTimeout(timeout);
+          setCheckingSession(false);
+        }
+      });
+
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+    };
+  }, []);
+
   useEffect(() => { if (user) api("/api/quests").then((data) => setQuests(data.quests.map(normalizeQuest))).catch((error) => notify(error.message)); }, [user]);
   useEffect(() => {
     function refreshOnActive() {
@@ -93,12 +118,6 @@ export default function Home() {
       window.removeEventListener("focus", refreshOnActive);
       document.removeEventListener("visibilitychange", refreshOnActive);
     };
-  }, [user]);
-  useEffect(() => {
-    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-list .nav-item"));
-    const views: AppView[] = ["board", "calendar", "inventory", "character", "achievements"];
-    const handlers = buttons.slice(2).map((button, index) => { const handler = () => setAppView(views[index + 2]); button.addEventListener("click", handler); return { button, handler }; });
-    return () => handlers.forEach(({ button, handler }) => button.removeEventListener("click", handler));
   }, [user]);
 
   const visibleQuests = useMemo(() => quests.filter((quest) => {
@@ -127,6 +146,13 @@ export default function Home() {
     start.setDate(1 - first.getDay());
     return Array.from({ length: 42 }, (_, index) => { const day = new Date(start); day.setDate(start.getDate() + index); return day; });
   }, [calendarDate]);
+  const calendarWeeks = useMemo(() => {
+    const weeks: Date[][] = [];
+    for (let i = 0; i < calendarDays.length; i += 7) {
+      weeks.push(calendarDays.slice(i, i + 7));
+    }
+    return weeks;
+  }, [calendarDays]);
   const calendarQuests = useMemo(() => {
     const map = new Map<string, Quest[]>();
     if (!calendarDate) return map;
@@ -235,11 +261,188 @@ export default function Home() {
   }
 
   function renderCalendar() {
-    if (appView === "inventory") return renderInventory();
-    if (appView === "character") return renderCharacter();
-    if (appView === "achievements") return renderAchievements();
-    return <section className="calendar-panel"><div className="calendar-header"><div><span className="eyebrow">QUEST SCHEDULE</span><h2>{calendarDate ? calendarDate.toLocaleDateString(undefined, { month: "long", year: "numeric" }) : "Calendar"}</h2><p>Active quests appear on every day up to their deadline.</p></div><div className="calendar-nav"><button onClick={() => calendarDate && setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))} aria-label="Previous month">←</button><button onClick={() => setCalendarDate(new Date())}>Today</button><button onClick={() => calendarDate && setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))} aria-label="Next month">→</button></div></div><div className="calendar-weekdays">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{calendarDays.map((day) => { const key = dateKey(day); const dayQuests = calendarQuests.get(key) ?? []; const sameMonth = calendarDate ? day.getMonth() === calendarDate.getMonth() : true; return <button key={key} className={`calendar-day ${sameMonth ? "" : "muted"} ${selectedDay === key ? "selected" : ""}`} onClick={() => setSelectedDay(key)}><span className="day-number">{day.getDate()}</span><div className="day-quests">{dayQuests.slice(0, 3).map((quest) => <span className={`calendar-quest ${quest.type.toLowerCase()}`} key={quest.id} title={quest.title}>{quest.title}</span>)}{dayQuests.length > 3 && <span className="more-quests">+{dayQuests.length - 3} more</span>}</div></button>; })}</div><div className="calendar-detail"><span className="eyebrow">SELECTED DAY</span><h3>{selectedDay ? new Date(`${selectedDay}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) : "Choose a day"}</h3>{selectedDayQuests.length ? <div className="selected-quests">{selectedDayQuests.map((quest) => <div className="selected-quest" key={quest.id}><span className={`calendar-dot ${quest.type.toLowerCase()}`} /><div><strong>{quest.title}</strong><small>{quest.type} · Deadline {quest.due}</small></div></div>)}</div> : <p>{selectedDay ? "No active quests on this day." : "Click any calendar day to reveal its active quests."}</p>}</div></section>;
+    const todayKey = dateKey(new Date());
+    const monthTitle = calendarDate
+      ? calendarDate.toLocaleDateString(undefined, { month: "long", year: "numeric" })
+      : "Calendar";
+
+    return (
+      <section className="calendar-panel" aria-label="Quest schedule calendar" itemScope itemType="https://schema.org/ScheduleAction">
+        <div className="calendar-header">
+          <div>
+            <span className="eyebrow">QUEST SCHEDULE</span>
+            <h2>{monthTitle}</h2>
+            <p>Active quests appear on every day up to their deadline.</p>
+          </div>
+          <div className="calendar-nav" role="toolbar" aria-label="Calendar month navigation">
+            <button
+              onClick={() => calendarDate && setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))}
+              aria-label="Previous month"
+            >
+              ←
+            </button>
+            <button
+              onClick={() => {
+                const now = new Date();
+                setCalendarDate(now);
+                setSelectedDay(dateKey(now));
+              }}
+            >
+              Today
+            </button>
+            <button
+              onClick={() => calendarDate && setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))}
+              aria-label="Next month"
+            >
+              →
+            </button>
+          </div>
+        </div>
+
+        <div className="calendar-layout">
+          <div className="calendar-main">
+            <div className="calendar-grid" role="grid" aria-label={`Monthly quest schedule for ${monthTitle}`}>
+              <div className="calendar-weekdays" role="row" aria-label="Days of the week">
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day, idx) => (
+                  <span
+                    key={day}
+                    role="columnheader"
+                    aria-label={["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][idx]}
+                  >
+                    {day}
+                  </span>
+                ))}
+              </div>
+              {calendarWeeks.map((week, weekIndex) => (
+                <div key={weekIndex} role="row" className="calendar-row" aria-label={`Week ${weekIndex + 1}`}>
+                  {week.map((day) => {
+                    const key = dateKey(day);
+                    const dayQuests = calendarQuests.get(key) ?? [];
+                    const sameMonth = calendarDate ? day.getMonth() === calendarDate.getMonth() : true;
+                    const isToday = key === todayKey;
+                    const isSelected = selectedDay === key;
+
+                    return (
+                      <button
+                        key={key}
+                        role="gridcell"
+                        className={`calendar-day ${sameMonth ? "" : "muted"} ${isSelected ? "selected" : ""} ${isToday ? "today" : ""}`}
+                        onClick={() => {
+                          setSelectedDay(key);
+                          if (typeof window !== "undefined" && window.innerWidth < 960) {
+                            setTimeout(() => {
+                              const el = document.getElementById("calendar-day-details");
+                              if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                            }, 50);
+                          }
+                        }}
+                        aria-label={`${day.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}: ${dayQuests.length} quests${isToday ? ", Today" : ""}`}
+                        aria-selected={isSelected}
+                        aria-current={isToday ? "date" : undefined}
+                      >
+                        <div className="day-top">
+                          <time dateTime={key} className="day-number">{day.getDate()}</time>
+                          {isToday && <span className="today-badge">Today</span>}
+                        </div>
+                        <div className="day-quests">
+                          {dayQuests.slice(0, 3).map((quest) => (
+                            <span className={`calendar-quest ${quest.type.toLowerCase()}`} key={quest.id} title={quest.title}>
+                              {quest.title}
+                            </span>
+                          ))}
+                          {dayQuests.length > 3 && <span className="more-quests">+{dayQuests.length - 3} more</span>}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+
+            <div className="calendar-legend" aria-label="Quest type legend">
+              <span className="legend-item"><i className="legend-dot main" /> Main quest</span>
+              <span className="legend-item"><i className="legend-dot daily" /> Daily quest</span>
+              <span className="legend-item"><i className="legend-dot side" /> Side quest</span>
+              <span className="legend-item"><i className="legend-dot weekly" /> Weekly quest</span>
+            </div>
+          </div>
+
+          <aside className="calendar-detail-panel" id="calendar-day-details" tabIndex={-1} aria-live="polite" aria-label="Selected day agenda">
+            <div className="calendar-detail-header">
+              <div>
+                <span className="eyebrow">SELECTED DAY AGENDA</span>
+                <h3>{selectedDay ? new Date(`${selectedDay}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric" }) : "Choose a day"}</h3>
+                <p className="day-subtitle">{selectedDay ? (selectedDay === todayKey ? "✦ Today's Missions" : "Scheduled quests for this date") : "Click any day on the calendar to inspect active quests"}</p>
+              </div>
+              {selectedDay && (
+                <button
+                  className="close-detail-btn"
+                  onClick={() => setSelectedDay(null)}
+                  aria-label="Dismiss day details"
+                  title="Close details"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {selectedDayQuests.length > 0 ? (
+              <div className="selected-quests-list">
+                <div className="panel-summary-bar">
+                  <span><b>{selectedDayQuests.length}</b> {selectedDayQuests.length === 1 ? "Quest" : "Quests"} active</span>
+                  <span><b>{selectedDayQuests.reduce((acc, q) => acc + (q.xp || 0), 0)}</b> XP total</span>
+                </div>
+                {selectedDayQuests.map((quest) => (
+                  <article className={`selected-quest-card ${quest.type.toLowerCase()}`} key={quest.id} itemScope itemType="https://schema.org/Action">
+                    <div className="selected-quest-header">
+                      <span className={`calendar-dot ${quest.type.toLowerCase()}`} />
+                      <span className="quest-type-label">{quest.type}</span>
+                      <span className={`difficulty ${quest.difficulty.toLowerCase()}`}>{quest.difficulty}</span>
+                    </div>
+                    <h4 itemProp="name">{quest.title}</h4>
+                    {quest.description && <p>{quest.description}</p>}
+                    <div className="selected-quest-meta">
+                      <span>◷ Deadline: <time>{quest.due}</time></span>
+                      <div className="selected-quest-rewards">
+                        <span>✦ <b>{quest.xp}</b> XP</span>
+                        <span>◇ <b>{quest.gold}</b> gold</span>
+                      </div>
+                    </div>
+                    <div className="selected-quest-actions">
+                      {quest.status === "completed" ? (
+                        <span className="completed-label">✓ Completed today</span>
+                      ) : (
+                        <button className="complete-btn" onClick={() => completeQuest(quest)} disabled={busy}>
+                          Complete quest
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-day-state">
+                <div className="empty-day-icon">✧</div>
+                <p>{selectedDay ? "No active quests scheduled on this date." : "Click any calendar day to inspect its active missions."}</p>
+                {selectedDay && (
+                  <button
+                    className="quick-plan-btn"
+                    onClick={() => {
+                      setAppView("board");
+                      setShowForm(true);
+                      setNewQuestDue(selectedDay);
+                    }}
+                  >
+                    ＋ Plan a quest for this day
+                  </button>
+                )}
+              </div>
+            )}
+          </aside>
+        </div>
+      </section>
+    );
   }
 
-  return <main className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">✦</span><span>QUESTLIFE</span></div><div className="player-card"><div className="avatar">✧</div><div><strong>{user.username}</strong><span>Level {user.level} · Wayfinder</span></div><span className="online-dot" /></div><nav className="nav-list" aria-label="Main navigation"><button className={appView === "board" ? "nav-item active" : "nav-item"} onClick={() => setAppView("board")}><span>▦</span> Quest board <b>{visibleQuests.length}</b></button><button className={appView === "calendar" ? "nav-item active" : "nav-item"} onClick={() => setAppView("calendar")}><span>◈</span> Calendar</button><button className={appView === "inventory" ? "nav-item active" : "nav-item"} onClick={() => setAppView("inventory")}><span>✥</span> Inventory</button><button className={appView === "character" ? "nav-item active" : "nav-item"} onClick={() => setAppView("character")}><span>♙</span> Character</button><button className={appView === "achievements" ? "nav-item active" : "nav-item"} onClick={() => setAppView("achievements")}><span>✹</span> Achievements</button></nav><div className="sidebar-footer"><div className="streak-icon">♨</div><div><strong>{user.streak} day streak</strong><span>Keep the flame alive</span></div></div><button className="sign-out" onClick={logout}>↪ Sign out</button></aside><section className="workspace"><header className="topbar"><div><span className="eyebrow">YOUR QUEST HALL</span><h1>{appView === "board" ? "Quest board" : appView.charAt(0).toUpperCase() + appView.slice(1)}</h1></div><div className="top-actions"><button className="icon-button" aria-label="Notifications">♧<i /></button><button className="profile-button"><span>{user.username.slice(0, 2).toUpperCase()}</span><b>{user.username}</b><small>⌄</small></button></div></header>{appView === "board" ? <section className="board-content"><section className="hero-panel"><div><span className="eyebrow gold">THE SUNLIT REALM · CHAPTER I</span><h2>Make today <em>legendary.</em></h2><p>Your next great adventure is hiding in the ordinary.</p></div><div className="hero-rune">✦</div><div className="level-panel"><div className="level-row"><span>LEVEL {user.level}</span><strong>{levelXp} <small>/ {levelTarget} XP</small></strong></div><div className="xp-track"><span style={{ width: `${Math.min(100, levelXp / levelTarget * 100)}%` }} /></div><span className="next-level">{Math.max(0, levelTarget - levelXp)} XP until next level</span></div></section><section className="stats-grid"><div className="stat-card"><span className="stat-icon coral">◒</span><div><small>QUESTS COMPLETED</small><strong>{completedCount}</strong></div></div><div className="stat-card"><span className="stat-icon gold-icon">◇</span><div><small>GOLD EARNED</small><strong>{user.gold}</strong></div></div><div className="stat-card"><span className="stat-icon mint">♨</span><div><small>CURRENT STREAK</small><strong>{user.streak} days</strong></div></div></section><div className="content-heading"><div><span className="eyebrow">YOUR ADVENTURE</span><h2>{questView === "active" ? "Active quests" : "Completed quests"} <span>{visibleQuests.length}</span></h2></div>{questView === "active" && <button className="primary-button" onClick={() => setShowForm((current) => !current)}>＋ New quest</button>}</div><div className="quest-view-tabs"><button className={questView === "active" ? "view-tab active" : "view-tab"} onClick={() => setQuestView("active")}>Active quests <b>{quests.filter((quest) => (quest.status ?? (quest.completed ? "completed" : "active")) === "active").length}</b></button><button className={questView === "completed" ? "view-tab active" : "view-tab"} onClick={() => setQuestView("completed")}>Completed <b>{completedCount}</b></button></div>{showForm && <div className="quick-add"><input autoFocus value={newQuest} onChange={(event) => setNewQuest(event.target.value)} placeholder="Name your next quest..." /><select value={newQuestType} onChange={(event) => setNewQuestType(event.target.value as QuestType)} aria-label="Quest type">{questTypes.map((type) => <option key={type} value={type}>{type} quest</option>)}</select><input className="deadline-input" type="datetime-local" value={newQuestDue} onChange={(event) => setNewQuestDue(event.target.value)} aria-label="Quest deadline" /><button onClick={addQuest} disabled={busy}>Add quest</button></div>}<div className="toolbar"><div className="filters">{filters.map((filter) => <button key={filter} className={activeFilter === filter ? "filter active" : "filter"} onClick={() => setActiveFilter(filter)}>{filter}</button>)}</div><label className="search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search quests" /></label></div><div className="quest-grid">{visibleQuests.map(renderQuestCard)}</div>{visibleQuests.length === 0 && <div className="empty-state">{questView === "active" ? "Your quest log is clear. Add your first mission to begin the adventure." : "No completed quests yet. Daily quests stay in the active realm because they repeat."}</div>}</section> : renderCalendar()}</section>{toast && <div className="toast">✦ {toast}</div>}</main>;
+  return <main className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark">✦</span><span>QUESTLIFE</span></div><div className="player-card"><div className="avatar">✧</div><div><strong>{user.username}</strong><span>Level {user.level} · Wayfinder</span></div><span className="online-dot" /></div><nav className="nav-list" aria-label="Main navigation"><button className={appView === "board" ? "nav-item active" : "nav-item"} onClick={() => setAppView("board")}><span>▦</span> Quest board <b>{visibleQuests.length}</b></button><button className={appView === "calendar" ? "nav-item active" : "nav-item"} onClick={() => setAppView("calendar")}><span>◈</span> Calendar</button><button className={appView === "inventory" ? "nav-item active" : "nav-item"} onClick={() => setAppView("inventory")}><span>✥</span> Inventory</button><button className={appView === "character" ? "nav-item active" : "nav-item"} onClick={() => setAppView("character")}><span>♙</span> Character</button><button className={appView === "achievements" ? "nav-item active" : "nav-item"} onClick={() => setAppView("achievements")}><span>✹</span> Achievements</button></nav><div className="sidebar-footer"><div className="streak-icon">♨</div><div><strong>{user.streak} day streak</strong><span>Keep the flame alive</span></div></div><button className="sign-out" onClick={logout}>↪ Sign out</button></aside><section className="workspace"><header className="topbar"><div><span className="eyebrow">YOUR QUEST HALL</span><h1>{appView === "board" ? "Quest board" : appView.charAt(0).toUpperCase() + appView.slice(1)}</h1></div><div className="top-actions"><button className="icon-button" aria-label="Notifications">♧<i /></button><button className="profile-button"><span>{user.username.slice(0, 2).toUpperCase()}</span><b>{user.username}</b><small>⌄</small></button></div></header>{appView === "board" && <section className="board-content"><section className="hero-panel"><div><span className="eyebrow gold">THE SUNLIT REALM · CHAPTER I</span><h2>Make today <em>legendary.</em></h2><p>Your next great adventure is hiding in the ordinary.</p></div><div className="hero-rune">✦</div><div className="level-panel"><div className="level-row"><span>LEVEL {user.level}</span><strong>{levelXp} <small>/ {levelTarget} XP</small></strong></div><div className="xp-track"><span style={{ width: `${Math.min(100, levelXp / levelTarget * 100)}%` }} /></div><span className="next-level">{Math.max(0, levelTarget - levelXp)} XP until next level</span></div></section><section className="stats-grid"><div className="stat-card"><span className="stat-icon coral">◒</span><div><small>QUESTS COMPLETED</small><strong>{completedCount}</strong></div></div><div className="stat-card"><span className="stat-icon gold-icon">◇</span><div><small>GOLD EARNED</small><strong>{user.gold}</strong></div></div><div className="stat-card"><span className="stat-icon mint">♨</span><div><small>CURRENT STREAK</small><strong>{user.streak} days</strong></div></div></section><div className="content-heading"><div><span className="eyebrow">YOUR ADVENTURE</span><h2>{questView === "active" ? "Active quests" : "Completed quests"} <span>{visibleQuests.length}</span></h2></div>{questView === "active" && <button className="primary-button" onClick={() => setShowForm((current) => !current)}>＋ New quest</button>}</div><div className="quest-view-tabs"><button className={questView === "active" ? "view-tab active" : "view-tab"} onClick={() => setQuestView("active")}>Active quests <b>{quests.filter((quest) => (quest.status ?? (quest.completed ? "completed" : "active")) === "active").length}</b></button><button className={questView === "completed" ? "view-tab active" : "view-tab"} onClick={() => setQuestView("completed")}>Completed <b>{completedCount}</b></button></div>{showForm && <div className="quick-add"><input autoFocus value={newQuest} onChange={(event) => setNewQuest(event.target.value)} placeholder="Name your next quest..." /><select value={newQuestType} onChange={(event) => setNewQuestType(event.target.value as QuestType)} aria-label="Quest type">{questTypes.map((type) => <option key={type} value={type}>{type} quest</option>)}</select><input className="deadline-input" type="datetime-local" value={newQuestDue} onChange={(event) => setNewQuestDue(event.target.value)} aria-label="Quest deadline" /><button onClick={addQuest} disabled={busy}>Add quest</button></div>}<div className="toolbar"><div className="filters">{filters.map((filter) => <button key={filter} className={activeFilter === filter ? "filter active" : "filter"} onClick={() => setActiveFilter(filter)}>{filter}</button>)}</div><label className="search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search quests" /></label></div><div className="quest-grid">{visibleQuests.map(renderQuestCard)}</div>{visibleQuests.length === 0 && <div className="empty-state">{questView === "active" ? "Your quest log is clear. Add your first mission to begin the adventure." : "No completed quests yet. Daily quests stay in the active realm because they repeat."}</div>}</section>}{appView === "calendar" && renderCalendar()}{appView === "inventory" && renderInventory()}{appView === "character" && renderCharacter()}{appView === "achievements" && renderAchievements()}</section>{toast && <div className="toast">✦ {toast}</div>}</main>;
 }

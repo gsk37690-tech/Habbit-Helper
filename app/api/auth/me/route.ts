@@ -4,7 +4,7 @@ import { getDatabase } from "@/lib/mongodb";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ user: null }, { status: 401 });
+  if (!user) return NextResponse.json({ user: null });
 
   // Calculate today and yesterday based on client header or server date
   const clientDate = request.headers.get("x-client-date");
